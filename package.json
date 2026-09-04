@@ -1,0 +1,26 @@
+{
+  "name": "task-mcp-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --test --experimental-strip-types tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run test && npm run typecheck && wrangler deploy --dry-run --outdir dist"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "agents": "0.20.1",
+    "croner": "10.0.1",
+    "jose": "6.1.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260801.1",
+    "@types/node": "26.0.1",
+    "typescript": "6.0.3",
+    "wrangler": "4.118.0"
+  }
+}

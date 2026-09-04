@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "task-mcp-worker",
+  "main": "src/main.ts",
+  "keep_vars": true,
+  "compatibility_date": "2026-09-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TASK_STORE",
+        "class_name": "TaskStoreDO"
+      }
+    ]
+  },
+  "exports": {
+    "TaskStoreDO": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "observability": {
+    "enabled": true
+  }
+}
