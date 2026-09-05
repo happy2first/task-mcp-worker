@@ -6,6 +6,7 @@ import type { AttachmentRecord, Env, NotificationConfig, RunRecord, TaskRecord }
 const ATTACHMENT_CHUNK_BYTES = 1024 * 1024;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const DEFAULT_LEASE_MINUTES = 90;
+const DEFAULT_NTFY_TOPIC = "Task-Monitor";
 
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 const errText = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -18,18 +19,23 @@ function parseJson<T>(value: string | null, fallback: T): T {
 function cleanNotification(input: unknown): NotificationConfig {
   const raw = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
   const allowed = new Set(["chatgpt", "weixin", "email", "ntfy"]);
-  const channels = Array.isArray(raw.channels)
+  let channels = Array.isArray(raw.channels)
     ? [...new Set(raw.channels.map(String).filter((x) => allowed.has(x)))] as NotificationConfig["channels"]
-    : ["chatgpt"] as NotificationConfig["channels"];
+    : [] as NotificationConfig["channels"];
+  const ntfyDisabled = raw.ntfyDisabled === true;
+  if (ntfyDisabled) channels = channels.filter((channel) => channel !== "ntfy");
+  else if (!channels.includes("ntfy")) channels.push("ntfy");
   const notifyOn = ["always", "success", "failure"].includes(String(raw.notifyOn)) ? String(raw.notifyOn) as NotificationConfig["notifyOn"] : "always";
   const strings = (v: unknown, max: number) => Array.isArray(v) ? [...new Set(v.map(String).map((s) => s.trim()).filter(Boolean))].slice(0, max) : undefined;
+  const ntfyTopic = String(raw.ntfyTopic || DEFAULT_NTFY_TOPIC).trim().slice(0, 200) || DEFAULT_NTFY_TOPIC;
   return {
-    channels: channels.length ? channels : ["chatgpt"],
+    channels,
     notifyOn,
     ...(strings(raw.weixinRecipients, 10)?.length ? { weixinRecipients: strings(raw.weixinRecipients, 10) } : {}),
     ...(strings(raw.emailTo, 20)?.length ? { emailTo: strings(raw.emailTo, 20) } : {}),
-    ...(String(raw.ntfyTopic || "").trim() ? { ntfyTopic: String(raw.ntfyTopic).trim().slice(0, 200) } : {}),
-  };
+    ...(channels.includes("ntfy") ? { ntfyTopic } : {}),
+    ...(ntfyDisabled ? { ntfyDisabled: true } : {}),
+  } as NotificationConfig;
 }
 
 type TaskRow = {
@@ -105,7 +111,7 @@ export class TaskStoreDO extends DurableObject<Env> {
       status: row.status as TaskRecord["status"],
       schedule: parseJson(row.schedule_json, { kind: "once", at: row.created_at }),
       nextDueAt: row.next_due_at,
-      notification: parseJson(row.notification_json, { channels: ["chatgpt"], notifyOn: "always" }),
+      notification: cleanNotification(parseJson(row.notification_json, {})),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       completedAt: row.completed_at,
@@ -174,10 +180,13 @@ export class TaskStoreDO extends DurableObject<Env> {
     const notification = body.notification === undefined ? current.notification : cleanNotification(body.notification);
     const scheduleChanged = body.schedule !== undefined;
     const due = scheduleChanged ? initialNextDue(schedule, new Date()) : current.nextDueAt;
+    const reactivateCompleted = scheduleChanged && current.status === "completed";
+    const status = reactivateCompleted ? "active" : current.status;
+    const completedAt = reactivateCompleted ? null : current.completedAt || null;
     const now = new Date().toISOString();
     this.ctx.storage.sql.exec(
-      "UPDATE tasks SET title=?,instruction=?,schedule_json=?,next_due_at=?,notification_json=?,updated_at=? WHERE id=?",
-      title, instruction, JSON.stringify(schedule), due, JSON.stringify(notification), now, id,
+      "UPDATE tasks SET title=?,instruction=?,status=?,schedule_json=?,next_due_at=?,notification_json=?,updated_at=?,completed_at=? WHERE id=?",
+      title, instruction, status, JSON.stringify(schedule), due, JSON.stringify(notification), now, completedAt, id,
     );
     return { success: true, task: this.task(id) };
   }
@@ -280,7 +289,7 @@ export class TaskStoreDO extends DurableObject<Env> {
     if (task.schedule.kind === "once") {
       this.ctx.storage.sql.exec("UPDATE tasks SET status='completed',completed_at=?,updated_at=? WHERE id=?", now, now, task.id);
     }
-    const shouldNotify = notifyRequested && (task.notification.notifyOn === "always" || (success && task.notification.notifyOn === "success") || (!success && task.notification.notifyOn === "failure"));
+    const shouldNotify = notifyRequested && task.notification.channels.length > 0 && (task.notification.notifyOn === "always" || (success && task.notification.notifyOn === "success") || (!success && task.notification.notifyOn === "failure"));
     return {
       success: true,
       run: this.runFromRow(this.ctx.storage.sql.exec<RunRow>("SELECT * FROM task_runs WHERE run_id=?", runId).toArray()[0]),
