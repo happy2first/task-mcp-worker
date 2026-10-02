@@ -24,6 +24,12 @@
 6. 初次若返回 `callback_host_not_allowed`，读取错误 `data.callbackHost`，核实主机归属后加入 EVENTS_CALLBACK_HOSTS，再次订阅。错误只暴露主机名，不记录完整 URL 或密钥。
 7. 对低风险测试任务调用 task_trigger_now，确认 webhook 得到 2xx、ChatGPT 随后 claim → 执行 → finish → notificationPlan → 通知。停止监控确认 unsubscribe 生效。保留每小时 poller。
 
+### 订阅诊断
+
+若 ChatGPT 只显示通用订阅错误，在 Cloudflare Observability 中查找 `mcp_events_rpc`。每次 Events RPC 会输出一条结构化日志；失败为 warn，成功为 info。日志包含 `method`、`ok`、`enabled`、`authorized`，以及可解析的 `callbackHost`；失败另含安全枚举 `reason` 和数值 `code`。不记录请求正文、完整 callback URL、路径、查询参数、JWT、签名密钥或异常原文。
+
+`callback_host_not_allowed` 时，核实日志中的 `callbackHost` 归属，将其精确加入 `EVENTS_CALLBACK_HOSTS`，保存部署后重试。`events_access_denied` 检查身份白名单，`missing_events_encryption_key` 检查 Secret 格式，`challenge_failed` 或 `timeout` 检查回调验证。Cron 的 `outcome: ok` 不能证明订阅或推送成功。此诊断不增加数据库表或配置项，也不改变订阅授权与 callback 白名单。
+
 官方当前支持 Work 网页、桌面 Cloud 和 dots。测试使用模拟 ChatGPT callback，真实连接的 challenge、订阅及唤醒仍需发布后验证。
 
 ## Callback 安全边界

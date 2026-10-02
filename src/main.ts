@@ -7,6 +7,7 @@ import { ADMIN_PAGE } from "./admin-page.js";
 import { TaskStoreDO } from "./store.js";
 import type { Env } from "./types.js";
 import { authorized } from "./events.js";
+import { eventDiagnostic } from "./events-diagnostics.js";
 
 export { TaskStoreDO };
 
@@ -294,8 +295,17 @@ export default {
       if (rpc.jsonrpc !== "2.0" || !(typeof rpc.id === "string" || typeof rpc.id === "number")) {
         return Response.json({ jsonrpc: "2.0", id: rpc.id ?? null, error: { code: -32600, message: "Invalid Request" } });
       }
-      const response = await storeStub(env).fetch("https://task-store.internal/events/rpc", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ method: rpc.method, owner, params: rpc.params ?? {} }) });
-      const data = await response.json() as JsonObject;
+      let response: Response;
+      let data: JsonObject;
+      try {
+        response = await storeStub(env).fetch("https://task-store.internal/events/rpc", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ method: rpc.method, owner, params: rpc.params ?? {} }) });
+        data = await response.json() as JsonObject;
+      } catch {
+        console.warn(eventDiagnostic(rpc.method, rpc.params, false, null, env.EVENTS_ENABLED === "true", authorized(owner, env)));
+        return Response.json({ jsonrpc: "2.0", id: rpc.id, error: { code: -32603, message: "internal_error" } }, { headers: { "cache-control": "no-store" } });
+      }
+      const diagnostic = eventDiagnostic(rpc.method, rpc.params, response.ok, data, env.EVENTS_ENABLED === "true", authorized(owner, env));
+      if (response.ok) console.info(diagnostic); else console.warn(diagnostic);
       return Response.json(response.ok ? { jsonrpc: "2.0", id: rpc.id, result: { ...data, resultType: "complete" } } : { jsonrpc: "2.0", id: rpc.id, error: { code: data.code || -32603, message: data.reason || "Event operation failed", data: { reason: data.reason || "internal_error", ...data.details } } }, { headers: { "cache-control": "no-store" } });
     }
     const response = await createMcpHandler(() => createServer(env), { route: "/mcp", responseMode: "json" })(request, env, ctx);
