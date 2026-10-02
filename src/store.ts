@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { DurableObject } from "cloudflare:workers";
+import { TaskEvents, EventError } from "./events.js";
 import { initialNextDue, nextDueAfterClaim, normalizeSchedule } from "./schedule.js";
 import type { AttachmentRecord, Env, NotificationConfig, RunRecord, TaskRecord } from "./types.js";
 
@@ -52,6 +53,7 @@ type AttachmentRow = {
 };
 
 export class TaskStoreDO extends DurableObject<Env> {
+  private events = new TaskEvents(this.ctx, this.env);
   private ensureSchema() {
     this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
@@ -398,6 +400,14 @@ export class TaskStoreDO extends DurableObject<Env> {
     this.ensureSchema();
     const url = new URL(request.url);
     try {
+      if (request.method === "POST" && url.pathname === "/events/tick") {
+        await this.events.tick();
+        return json({ ok: true });
+      }
+      if (request.method === "POST" && url.pathname === "/events/rpc") {
+        const body = await request.json() as { method: string; owner: string; params: unknown };
+        return json(await this.events.request(body.method, body.owner, body.params));
+      }
       if (request.method === "GET" && url.pathname === "/status") return json(this.status());
       if (request.method === "GET" && url.pathname === "/tasks") return json(this.listTasks(url));
       if (request.method === "GET" && url.pathname.startsWith("/tasks/")) return json({ task: this.task(decodeURIComponent(url.pathname.slice(7))) });
@@ -420,6 +430,7 @@ export class TaskStoreDO extends DurableObject<Env> {
       if (url.pathname === "/attachments/delete") return json(this.deleteAttachment(String(body.attachmentRef || "")));
       return json({ error: "not_found" }, 404);
     } catch (error) {
+      if (error instanceof EventError) return json({ error: error.reason, code: error.code, reason: error.reason, details: error.details }, 400);
       return json({ error: "task_store_error", message: errText(error) }, 400);
     }
   }

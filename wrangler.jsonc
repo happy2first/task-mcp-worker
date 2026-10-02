@@ -5,6 +5,7 @@
   "keep_vars": true,
   "compatibility_date": "2026-09-03",
   "compatibility_flags": ["nodejs_compat"],
+  "triggers": { "crons": ["* * * * *"] },
   "durable_objects": {
     "bindings": [
       {

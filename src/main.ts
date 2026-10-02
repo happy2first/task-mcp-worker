@@ -6,6 +6,7 @@ import { z } from "zod";
 import { ADMIN_PAGE } from "./admin-page.js";
 import { TaskStoreDO } from "./store.js";
 import type { Env } from "./types.js";
+import { authorized } from "./events.js";
 
 export { TaskStoreDO };
 
@@ -127,7 +128,7 @@ function createServer(env: Env) {
   }, async ({ id }) => toolResult(await postStore(env, "/tasks/trigger", { id })));
 
   server.registerTool("task_claim_due", {
-    description: "供 ChatGPT 的唯一小时级轮询任务调用：原子领取已到期任务并创建/续租 runId。领取后必须执行每个 task.instruction，并用对应 runId 调 task_run_finish。无到期任务时返回空数组。",
+    description: "供 ChatGPT 小时轮询或 task.due 事件处理调用：原子领取已到期任务并创建/续租 runId。领取后必须执行每个 task.instruction，并用对应 runId 调 task_run_finish。无到期任务时返回空数组。",
     inputSchema: {
       limit: z.number().int().min(1).max(20).optional().default(10),
       leaseMinutes: z.number().int().min(15).max(360).optional().default(90),
@@ -229,6 +230,9 @@ function accessDenied(error: unknown) {
 }
 
 export default {
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    if (env.EVENTS_ENABLED === "true") ctx.waitUntil(postStore(env, "/events/tick", {}));
+  },
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/") return Response.json({ ok: true, service: "task-mcp-worker", version: VERSION, mcp: "/mcp", admin: "/admin", health: "/health" });
@@ -277,10 +281,32 @@ export default {
     }
 
     if (url.pathname === "/health") {
-      try { return Response.json({ ok: true, service: "task-mcp-worker", version: VERSION, user: identity.email || identity.sub || "authenticated", store: await callStore(env, "/status") }); }
+      try { return Response.json({ ok: true, service: "task-mcp-worker", version: VERSION, user: identity.email || identity.sub || "authenticated", events: { enabled: env.EVENTS_ENABLED === "true", principal: identity.sub, authorized: typeof identity.sub === "string" && authorized(identity.sub, env) }, store: await callStore(env, "/status") }); }
       catch (error) { return Response.json({ ok: false, service: "task-mcp-worker", version: VERSION, error: error instanceof Error ? error.message : String(error) }, { status: 503 }); }
     }
 
-    return createMcpHandler(() => createServer(env), { route: "/mcp", responseMode: "json" })(request, env, ctx);
+    // The pinned SDK supports MCP 2.0, but predates the Events extension.
+    // Keep all existing tool transport handling intact; route the extension's
+    // JSON-RPC methods through the same Access-authenticated endpoint.
+    const rpc = request.method === "POST" ? await request.clone().json().catch(() => null) as JsonObject | null : null;
+    const owner = typeof identity.sub === "string" ? identity.sub : "";
+    if (rpc && ["events/list", "events/subscribe", "events/unsubscribe"].includes(rpc.method)) {
+      if (rpc.jsonrpc !== "2.0" || !(typeof rpc.id === "string" || typeof rpc.id === "number")) {
+        return Response.json({ jsonrpc: "2.0", id: rpc.id ?? null, error: { code: -32600, message: "Invalid Request" } });
+      }
+      const response = await storeStub(env).fetch("https://task-store.internal/events/rpc", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ method: rpc.method, owner, params: rpc.params ?? {} }) });
+      const data = await response.json() as JsonObject;
+      return Response.json(response.ok ? { jsonrpc: "2.0", id: rpc.id, result: { ...data, resultType: "complete" } } : { jsonrpc: "2.0", id: rpc.id, error: { code: data.code || -32603, message: data.reason || "Event operation failed", data: { reason: data.reason || "internal_error", ...data.details } } }, { headers: { "cache-control": "no-store" } });
+    }
+    const response = await createMcpHandler(() => createServer(env), { route: "/mcp", responseMode: "json" })(request, env, ctx);
+    if (rpc?.method === "server/discover" && authorized(owner, env) && response.ok && response.headers.get("content-type")?.includes("application/json")) {
+      const data = await response.clone().json() as JsonObject;
+      if (data.result?.capabilities && data.result.supportedVersions?.includes("2026-07-28")) {
+        data.result.capabilities.events = {};
+        const headers = new Headers(response.headers); headers.delete("content-length");
+        return Response.json(data, { status: response.status, headers });
+      }
+    }
+    return response;
   },
 };
