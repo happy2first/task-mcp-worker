@@ -14,5 +14,6 @@ jobs:
         with:
           node-version: 24
       - run: npm install
+      - run: npm test
       - run: npm run typecheck
       - run: npx wrangler deploy --dry-run --outdir dist

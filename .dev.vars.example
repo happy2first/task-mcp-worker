@@ -1,3 +1,9 @@
 # Same Cloudflare Access pattern as weixin-mcp-worker.
 TEAM_DOMAIN=https://your-team.cloudflareaccess.com
 POLICY_AUD=replace-with-access-application-aud
+EVENTS_ENABLED=false
+EVENTS_ALLOWED_PRINCIPALS=replace-with-access-jwt-sub
+# Exact host from ChatGPT's actual callback URL, not a guessed callback URL.
+EVENTS_CALLBACK_HOSTS=
+# Generate 32 random bytes as 64 hex characters. Store with wrangler secret put.
+EVENTS_ENCRYPTION_KEY=

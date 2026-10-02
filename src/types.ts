@@ -77,4 +77,8 @@ export interface Env {
   TASK_STORE: DurableObjectNamespace;
   TEAM_DOMAIN: string;
   POLICY_AUD: string;
+  EVENTS_ENABLED?: string;
+  EVENTS_ALLOWED_PRINCIPALS?: string;
+  EVENTS_CALLBACK_HOSTS?: string;
+  EVENTS_ENCRYPTION_KEY?: string;
 }

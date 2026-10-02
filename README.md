@@ -43,6 +43,10 @@ External poller / agent
   5. task_run_record_notifications
 ```
 
+## MCP Events
+
+Optional `task.due` webhook events use `events/list`, `events/subscribe`, and `events/unsubscribe`. Minute-level Cron detects due work; the existing hourly claim → execute → finish → notificationPlan flow remains the fallback. Events are disabled until configured. See [configuration, deployment and security boundaries](docs/mcp-events.md).
+
 ## MCP tools
 
 ### Task management
